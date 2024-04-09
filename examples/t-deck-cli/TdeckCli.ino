@@ -1,26 +1,46 @@
-#include <Wire.h>
-#include <TFT_eSPI.h>
-#include "utilities.h"
-#include <WiFi.h> 
-#include <ctype.h>
-#include <Pangodream_18650_CL.h>
+/*******************************************************************************
+* TDECKCLI BASED ON ORIGINAL WORK BY abdallahnatsheh <https://github.com/abdallahnatsheh/T-DECK-CLI>
+*
+* Incorporates some code by moononournation <https://github.com/moononournation/T-Deck/tree/main>
+*******************************************************************************/
+
+#include <Arduino.h>
+#include <BLEAdvertisedDevice.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
+#include <ctype.h>
 #include <DigitalRainAnimation.hpp>
 #include <ESP32Ping.h>
+#include <Pangodream_18650_CL.h>
+#include <TFT_eSPI.h>
+#include "utilities.h"
+#include <WiFi.h> 
+#include <Wire.h>
+
+#include "TDECK_PINS.h"
+
+/*******************************************************************************
+ * Please config the touch panel in touch.h
+ ******************************************************************************/
+// #include "touch.h"
+
+/*******************************************************************************
+ * Please config the optional keyboard in keyboard.h
+ ******************************************************************************/
+#include "keyboard.h"
 
 
+//CONFIG VARS
+String HOST_NAME = "T-DECk";
+int invertDisplay = 1; // 1 for true, 0 for false. Set this to "true" if the screen background appears white on your device
+// END CONFIG VARS
 
-#define LILYGO_KB_SLAVE_ADDRESS 0x55
 #define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 240
 
 #define CONV_FACTOR 1.8
 #define READS 20
-String HOST_NAME = "T-DECk";
-
 
 TFT_eSPI tft = TFT_eSPI();
 DigitalRainAnimation<TFT_eSPI> matrix_effect = DigitalRainAnimation<TFT_eSPI>();
@@ -42,39 +62,61 @@ bool connectedToNetwork = false; // Flag to track if device connected to wifi ne
 int scanTime = 5; // In seconds
 BLEScan* pBLEScan;
 
+#define PRE_INIT()                          \
+  {                                         \
+    pinMode(TDECK_SDCARD_CS, OUTPUT);       \
+    digitalWrite(TDECK_SDCARD_CS, HIGH);    \
+    pinMode(TDECK_RADIO_CS, OUTPUT);        \
+    digitalWrite(TDECK_RADIO_CS, HIGH);     \
+    pinMode(TDECK_PERI_POWERON, OUTPUT);    \
+    digitalWrite(TDECK_PERI_POWERON, HIGH); \
+    delay(500);                             \
+  }
+
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("T-Deck Keyboard Master");
-
-    pinMode(BOARD_POWERON, OUTPUT);
-    digitalWrite(BOARD_POWERON, HIGH);
-
-    Wire.begin(BOARD_I2C_SDA, BOARD_I2C_SCL);
+    Serial.setDebugOutput(true);
+    // while(!Serial);
+    Serial.println("Initializing T-DECK CLI v0.1");
+    
+    PRE_INIT();
 
     tft.begin();
     tft.setRotation(1);
-    tft.invertDisplay(0);
+    tft.invertDisplay(invertDisplay);
     matrix_effect.init(&tft);
     clearScreen();
 
+    Wire.begin(TDECK_I2C_SDA, TDECK_I2C_SCL);
+
+    // Init keyboard device
+    keyboard_init();
+    Serial.println("Keyboard Initialize complete");
     // Display command prompt
     tdeck_begin();
-        // Check keyboard
-    Wire.requestFrom(LILYGO_KB_SLAVE_ADDRESS, 1);
-    if (Wire.read() == -1) {
-        while (1) {
-            Serial.println("LILYGO Keyboad not online .");
-            delay(1000);
-        }
-    }
+    Serial.println("TDECK CLI begin...");
+
+    // Init trackball
+    /* 
+    pinMode(TDECK_TRACKBALL_UP, INPUT_PULLUP);
+    attachInterrupt(TDECK_TRACKBALL_UP, ISR_up, FALLING);
+    pinMode(TDECK_TRACKBALL_DOWN, INPUT_PULLUP);
+    attachInterrupt(TDECK_TRACKBALL_DOWN, ISR_down, FALLING);
+    pinMode(TDECK_TRACKBALL_LEFT, INPUT_PULLUP);
+    attachInterrupt(TDECK_TRACKBALL_LEFT, ISR_left, FALLING);
+    pinMode(TDECK_TRACKBALL_RIGHT, INPUT_PULLUP);
+    attachInterrupt(TDECK_TRACKBALL_RIGHT, ISR_right, FALLING);
+    pinMode(TDECK_TRACKBALL_CLICK, INPUT_PULLUP);
+    attachInterrupt(TDECK_TRACKBALL_CLICK, ISR_click, FALLING);
+    */
 }
 
 void loop()
 {
     // Read key value from T-Keyboard
     char incoming = 0;
-    Wire.requestFrom(LILYGO_KB_SLAVE_ADDRESS, 1);
+    Wire.requestFrom(TDECK_KEYBOARD_ADDR, 1);
     while (Wire.available() > 0)
     {
         incoming = Wire.read();
@@ -422,21 +464,6 @@ void scanWiFiNetworks()
     }
 }
 
-char getKeyboardInput()
-{
-    char incoming = 0;
-    Wire.requestFrom(LILYGO_KB_SLAVE_ADDRESS, 1);
-    while (Wire.available() > 0)
-    {
-        incoming = Wire.read();
-        if (incoming != (char)0x00)
-        {
-            return incoming;
-        }
-    }
-    
-}
-
 bool startsWith(const char* str, const char* prefix)
 {
     while (*prefix)
@@ -571,7 +598,7 @@ String readPassword()
 
     while (true)
     {
-        Wire.requestFrom(LILYGO_KB_SLAVE_ADDRESS, 1);
+        Wire.requestFrom(TDECK_KEYBOARD_ADDR, 1);
         while (Wire.available() > 0)
         {
             character = Wire.read();

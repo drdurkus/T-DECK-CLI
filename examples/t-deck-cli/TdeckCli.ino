@@ -13,7 +13,9 @@
 #include <DigitalRainAnimation.hpp>
 #include <ESP32Ping.h>
 #include <Pangodream_18650_CL.h>
+//#include <SoftwareSerial.h>
 #include <TFT_eSPI.h>
+#include <TinyGPSPlus.h>
 #include "utilities.h"
 #include <WiFi.h> 
 #include <Wire.h>
@@ -32,8 +34,10 @@
 
 
 //CONFIG VARS
-String HOST_NAME = "T-DECk";
+String HOST_NAME = "T-DECK";
+String VERSION = "0.1x";
 int invertDisplay = 1; // 1 for true, 0 for false. Set this to "true" if the screen background appears white on your device
+int textSize = 1; //1 is default
 // END CONFIG VARS
 
 #define SCREEN_WIDTH  320
@@ -42,7 +46,16 @@ int invertDisplay = 1; // 1 for true, 0 for false. Set this to "true" if the scr
 #define CONV_FACTOR 1.8
 #define READS 20
 
-TFT_eSPI tft = TFT_eSPI();
+static const int GPS_RXPin = 4, GPS_TXPin = 3; //GPS RX & TX Pins
+static const uint32_t GPS_Baud = 4800; //GPS BAUD Rate
+
+// The TinyGPSPlus object
+TinyGPSPlus gps;
+
+// The serial connection to the GPS device
+//SoftwareSerial ss(GPS_RXPin, GPS_TXPin);
+
+TFT_eSPI tft = TFT_eSPI(); // TFT Object 
 DigitalRainAnimation<TFT_eSPI> matrix_effect = DigitalRainAnimation<TFT_eSPI>();
 Pangodream_18650_CL BL(BOARD_BAT_ADC, CONV_FACTOR, READS);
 
@@ -165,27 +178,22 @@ void executeCommand()
     {
         printESPInfo();
     }
-    else if (strcmp(command, "cls") == 0)
-    {
+    else if (strcmp(command, "cls") == 0){
         tdeck_begin();
     }
-    else if (strcmp(command, "scanwifi") == 0 || strcmp(command, "sw") == 0)
-    {
+    else if (strcmp(command, "scanwifi") == 0 || strcmp(command, "sw") == 0){
         scanWiFiNetworks();
     }
-    else if (startsWith(command, "connectwifi") == 1 || startsWith(command, "cw") == 1)
-    {
+    else if (startsWith(command, "connectwifi") == 1 || startsWith(command, "cw") == 1){
         connectToWiFiCommand();
     }
-    else if (strcmp(command, "scanblue") == 0 || strcmp(command, "sbl") == 0)
-    {
+    else if (strcmp(command, "scanblue") == 0 || strcmp(command, "sbl") == 0){
         scanBluetoothDevices();
     }
     else if (strcmp(command, "matrix") == 0 || strcmp(command, "MATRIX") == 0){
         launchMatrixAnimation();
     }
-    else if (startsWith(command, "portscan") == 1 || startsWith(command, "ps") == 1)
-    {
+    else if (startsWith(command, "portscan") == 1 || startsWith(command, "ps") == 1){
         // Extract IP address, start port, and end port from the command
         String ipAddress = getValue(command, ' ', 1);
         String startPortStr = getValue(command, ' ', 2);
@@ -228,17 +236,16 @@ void executeCommand()
                 Serial.println(endPort);
                 performPortScan(targetIp, startPort, endPort);
             }
-        }
-    else if (startsWith(command, "netdiscover") == 1 || startsWith(command, "nd") == 1)
-    {
+    }
+    else if (startsWith(command, "netdiscover") == 1 || startsWith(command, "nd") == 1){
         networkDiscover();
-    }
-
-     
-    else if (strcmp(command, "help") == 0) {
+    } else  if(strcmp(command,"gps") == 0){
+        gpsCoords();
+    } else if (strcmp(command, "help") == 0) {
         printHelp();
-    }
-    else {
+    } else if(strcmp(command,"ver") == 0){
+        printVer();
+    } else {
         tft.setCursor(10, tft.getCursorY());
         tft.println("Invalid command. Type 'help' to see available commands.");
         printCommandScreen();
@@ -273,6 +280,13 @@ void clearCommandOutput()
     // Clear the command output area
     tft.fillRect(0, outputY, SCREEN_WIDTH, SCREEN_HEIGHT - outputY, TFT_BLACK);
 }
+void printVer(){
+    tft.setCursor(10, tft.getCursorY());
+    tft.print("T-DECK CLI v");
+    tft.println(VERSION.c_str());
+  printCommandScreen();
+  return;
+}
 void printHelp() {
   tft.setCursor(10, tft.getCursorY());
   tft.println("Available commands:");
@@ -290,6 +304,10 @@ void printHelp() {
   tft.println("matrix/MATRIX - Launch matrix animation");
   tft.setCursor(10, tft.getCursorY());
   tft.println("netdiscover/nd - Discover devices on the network");
+  tft.setCursor(10, tft.getCursorY());
+  tft.println("gps         - Display current GPS time and coordinates");
+  tft.setCursor(10, tft.getCursorY());
+  tft.println("ver         - Display T-DECK CLI version information.");
   tft.setCursor(10, tft.getCursorY());
   tft.println("help        - Print this help message");
   printCommandScreen();
@@ -315,9 +333,11 @@ void printESPInfo()
         tft.println("not connected to network");
     }
     tft.setCursor(10, tft.getCursorY());
+    tft.print("Hostname: ");
+    tft.println(HOST_NAME.c_str());
+    tft.setCursor(10, tft.getCursorY());
     tft.print("MAC Address: ");
     tft.println(WiFi.macAddress());
-
     tft.setCursor(10, tft.getCursorY());
     tft.print("Average value from pin: ");
     tft.println(BL.pinRead());
@@ -389,7 +409,7 @@ void scanWiFiNetworks()
         clearScreen();
 
         tft.setCursor(10, outputY);
-        tft.setTextSize(1); // Set a smaller font size
+        tft.setTextSize(textSize); // Set a smaller font size
         tft.print("Page ");
         tft.print(currentPage + 1);
         tft.print("/");
@@ -403,7 +423,7 @@ void scanWiFiNetworks()
 
         for (int i = startIndex; i < endIndex; i++)
         {
-            tft.setTextSize(1); // Set a smaller font size
+            tft.setTextSize(textSize); // Set a smaller font size
             tft.print("|   ");
             tft.print(i);
             tft.print("   | ");
@@ -478,18 +498,22 @@ bool startsWith(const char* str, const char* prefix)
 void printFirstCommandScreen(){
     tft.setCursor(10, outputY);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(1); // Set a smaller font size
-    tft.print("CMD> ");
+    tft.setTextSize(textSize); // Set a smaller font size
+    tft.print("CMD@");
+    tft.print(HOST_NAME.c_str());
+    tft.print(">");
     tft.print(command);
 }
 void printCommandScreen(){
     tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(1); // Set a smaller font size
+    tft.setTextSize(textSize); // Set a smaller font size
     memset(command, 0, bufferSize);
     commandIndex = 0;
     tft.println();
     tft.setCursor(10, tft.getCursorY());
-    tft.print("CMD> ");
+    tft.print("CMD@");
+    tft.print(HOST_NAME.c_str());
+    tft.print(">");
     tft.print(command);
 }
 
@@ -497,9 +521,19 @@ void printCommandScreen(){
 void tdeck_begin(){
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(1);
+    tft.setTextSize(textSize);
     tft.setCursor(10, promptY + 8);
-    tft.println("T-DECK CLI v0.1");
+    tft.print("T-DECK CLI v");
+    tft.print(VERSION.c_str());
+
+ if (millis() > 5000 && gps.charsProcessed() < 10)
+  {
+    Serial.println(F("No GPS detected: check connection."));
+    tft.setCursor(10, tft.getCursorY());
+    tft.println(F("No GPS detected: check connection."));
+    while(true);
+  }
+
     // Clear the command buffer and reset the index
     memset(command, 0, bufferSize);
     commandIndex = 0;
@@ -507,13 +541,11 @@ void tdeck_begin(){
 }
 
 //clear the screen under the main title t-deck cli v0.1
-void clearScreen()
-{
+void clearScreen(){
     tft.fillRect(0, promptY + promptHeight, SCREEN_WIDTH, SCREEN_HEIGHT - (promptY + promptHeight), TFT_BLACK);
 }
 
-void connectToWiFiCommand()
-{
+void connectToWiFiCommand(){
     if (!networkScanExecuted)
     {
         tft.println("Please execute scanwifi command first");
@@ -591,8 +623,7 @@ void connectToWiFiCommand()
     return;
 }
 
-String readPassword()
-{
+String readPassword(){
     String password;
     char character;
 
@@ -631,17 +662,19 @@ String readPassword()
     return password;
 }
 
-void clearInputText()
-{
+void clearInputText(){
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(1);
+    tft.setTextSize(textSize);
     tft.setCursor(10, promptY + 8);
-    tft.println("T-DECK CLI v0.1");
+    tft.print("T-DECK CLI v");
+    tft.println(VERSION.c_str());
     tft.setCursor(10, outputY);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(1); // Set a smaller font size
-    tft.println("CMD> ");
+    tft.setTextSize(textSize); // Set a smaller font size
+    tft.print("CMD@");
+    tft.print(HOST_NAME.c_str());
+    tft.println(">");
 }
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
@@ -683,7 +716,7 @@ void scanBluetoothDevices() {
 
         clearScreen();
         tft.setCursor(10, outputY);
-        tft.setTextSize(1); // Set a smaller font size
+        tft.setTextSize(textSize); // Set a smaller font size
         tft.print("Page ");
         tft.print(currentPage + 1);
         tft.print("/");
@@ -856,7 +889,7 @@ void performPortScan(const IPAddress& targetIP, int startPort, int endPort)
     {
         clearScreen();
         tft.setCursor(10, outputY);
-        tft.setTextSize(1); // Set a smaller font size
+        tft.setTextSize(textSize); // Set a smaller font size
         tft.print("Port Scan - IP: ");
         tft.println(targetIP.toString());
         tft.setCursor(10, tft.getCursorY());
@@ -874,7 +907,7 @@ void performPortScan(const IPAddress& targetIP, int startPort, int endPort)
         {
             String status = performPortCheck(targetIP, port) ? "Open" : "Closed";
             if(strcmp(status.c_str(),"Open") == 0){
-                tft.setTextSize(1); // Set a smaller font size
+                tft.setTextSize(textSize); // Set a smaller font size
                 tft.print("| ");
                 tft.print(port);
                 tft.setCursor(tft.getCursorX(), tft.getCursorY());
@@ -930,4 +963,102 @@ bool isValidIPAddress(const char* text)
     return true;
   }
   return false;
+}
+
+//GPS
+void gpsCoords()
+{
+  // This sketch displays information every time a new sentence is correctly encoded.
+  /*while (ss.available() > 0)
+    if (gps.encode(ss.read()))
+      GPSdisplayInfo();
+    */
+  if (millis() > 5000 && gps.charsProcessed() < 10)
+  {
+    Serial.println(F("No GPS detected: check connection."));
+    tft.setCursor(10, tft.getCursorY());
+    tft.println(F("No GPS detected: check connection."));
+    while(true);
+  }
+}
+
+void GPSdisplayInfo()
+{
+  Serial.print(F("Location: "));
+  tft.print(F("Location: ")); 
+  if (gps.location.isValid())
+  {
+    tft.setCursor(10, tft.getCursorY());
+    Serial.print(gps.location.lat(), 6);
+    tft.print(gps.location.lat(), 6);
+    Serial.print(F(","));
+    tft.print(F(","));
+    Serial.print(gps.location.lng(), 6);
+    tft.print(gps.location.lng(), 6);
+  }
+  else
+  {
+    Serial.print(F("INVALID COORDINATES"));
+    tft.print(F("INVALID COORDINATES"));
+  }
+
+  Serial.print(F("  Date/Time: "));
+  tft.print(F("  Date/Time: "));
+  if (gps.date.isValid())
+  {
+    Serial.print(gps.date.month());
+    Serial.print(F("/"));
+    Serial.print(gps.date.day());
+    Serial.print(F("/"));
+    Serial.print(gps.date.year());
+    tft.print(gps.date.month());
+    tft.print(F("/"));
+    tft.print(gps.date.day());
+    tft.print(F("/"));
+    tft.print(gps.date.year());
+  }
+  else
+  {
+    Serial.print(F("INVALID DATE"));
+    tft.print(F("INVALID DATE"));
+
+  }
+
+  Serial.print(F(" "));
+  if (gps.time.isValid())
+  {
+    if (gps.time.hour() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.hour());
+    Serial.print(F(":"));
+    tft.print(gps.time.hour());
+    tft.print(F(":"));
+    if (gps.time.minute() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.minute());
+    Serial.print(F(":"));
+    tft.print(gps.time.minute());
+    tft.print(F(":"));
+    if (gps.time.second() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.second());
+    Serial.print(F("."));
+    tft.print(gps.time.second());
+    tft.print(F("."));
+    if (gps.time.centisecond() < 10) Serial.print(F("0"));
+    Serial.print(gps.time.centisecond());
+    tft.print(gps.time.centisecond());
+
+  }
+  else
+  {
+    Serial.print(F("INVALID TIME"));
+    tft.print(F("INVALID TIME"));
+  }
+
+  Serial.println();
+  tft.println("Press Q to return to CLI");
+    char incomingKey = getKeyboardInput();
+    if (incomingKey == 'q' || incomingKey == 'Q')
+    {
+        tdeck_begin();
+        return;
+    }
 }
